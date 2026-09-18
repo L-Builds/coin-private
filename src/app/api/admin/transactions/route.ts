@@ -19,7 +19,7 @@ export const GET = handler(async (req: NextRequest) => {
         q ? { OR: [{ reference: { contains: q } }, { description: { contains: q } }] } : {},
       ],
     },
-    include: { entries: true, user: { select: { name: true, email: true } } },
+    include: { entries: true, user: { select: { name: true, email: true, wallets: { select: { assetSymbol: true } } } } },
     orderBy: { createdAt: 'desc' },
     take: 200,
   });
@@ -27,7 +27,8 @@ export const GET = handler(async (req: NextRequest) => {
   return ok({
     transactions: txs.map((t) => ({
       id: t.id, reference: t.reference, type: t.type, status: t.status,
-      description: t.description, userName: t.user?.name, userEmail: t.user?.email,
+      description: t.description, userId: t.userId, userName: t.user?.name, userEmail: t.user?.email,
+      walletSymbols: t.user?.wallets.map((w) => w.assetSymbol) ?? [],
       entries: t.entries, createdAt: t.createdAt, postedAt: t.postedAt,
       meta: t.meta,
     })),

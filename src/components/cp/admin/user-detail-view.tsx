@@ -32,7 +32,7 @@ interface DetailData {
   transfers: Array<{ id: string; reference: string; kind: string; assetSymbol: string; amount: number; status: string; toAddress: string; memo: string | null; createdAt: string }>;
   deposits: Array<{ id: string; reference: string; assetSymbol: string; amount: number; method: string; status: string; note: string | null; sourceAddress: string | null; sourceReference: string | null; createdAt: string }>;
   withdrawals: Array<{ id: string; reference: string; assetSymbol: string; amount: number; status: string; address: string; note: string | null; createdAt: string }>;
-  ledgerTxs: Array<{ id: string; reference: string; type: string; status: string; description: string; meta: string; createdAt: string; entries: Array<{ direction: string; assetSymbol: string; amount: number }> }>;
+  ledgerTxs: Array<{ id: string; reference: string; type: string; status: string; description: string; meta: string; createdAt: string; entries: Array<{ direction: string; assetSymbol: string; amount: number; memo?: string | null }> }>;
   securityEvents: Array<{ id: string; type: string; ip: string | null; createdAt: string }>;
   promos: Array<{ code: string; title: string; redeemedAt: string }>;
   transactionEdits: Array<{ id: string; recordType: string; recordId: string; changes: string; reason: string; editedBy: string; createdAt: string }>;
@@ -64,6 +64,20 @@ type EditableRecord = {
 
 type ManagedWallet = DetailUser['wallets'][number];
 
+type LedgerEditTarget = DetailData['ledgerTxs'][number];
+
+function readLedgerCustomerLabel(transaction: LedgerEditTarget): string {
+  try {
+    const parsed = JSON.parse(transaction.meta) as { customerLabel?: string };
+    if (typeof parsed.customerLabel === 'string' && parsed.customerLabel) return parsed.customerLabel;
+  } catch { /* legacy metadata */ }
+  return transaction.entries[0]?.direction === 'DEBIT' ? 'WALLET_DEBIT' : 'RECEIVED';
+}
+
+function canFinanciallyEditLedger(transaction: LedgerEditTarget): boolean {
+  return transaction.type === 'ADJUSTMENT' && transaction.status === 'POSTED' && transaction.entries.length === 1;
+}
+
 export function AdminUserDetailView() {
   const { adminParams, adminNavigate } = useUI();
   const id = adminParams.id ?? '';
@@ -77,6 +91,8 @@ export function AdminUserDetailView() {
   const [closeReason, setCloseReason] = useState('');
   const [record, setRecord] = useState<EditableRecord | null>(null);
   const [recordForm, setRecordForm] = useState({ sourceAddress: '', sourceReference: '', note: '', address: '', toAddress: '', memo: '', correctionNote: '', reason: '' });
+  const [ledgerEdit, setLedgerEdit] = useState<LedgerEditTarget | null>(null);
+  const [ledgerEditForm, setLedgerEditForm] = useState({ symbol: '', amount: '', direction: 'CREDIT', customerLabel: 'RECEIVED', reason: '' });
   const [walletToSet, setWalletToSet] = useState<ManagedWallet | null>(null);
   const [walletForm, setWalletForm] = useState({ available: '', reserved: '', fundingSource: '', reason: '' });
   const [busy, setBusy] = useState(false);
@@ -175,6 +191,48 @@ export function AdminUserDetailView() {
       const result = await res.json();
       if (result.error) toast.error(result.error);
       else { toast.success(result.message); setRecord(null); reload(); }
+    } finally { setBusy(false); }
+  }
+
+  function openLedgerEdit(transaction: LedgerEditTarget) {
+    if (!canFinanciallyEditLedger(transaction)) {
+      openRecord({ id: transaction.id, kind: 'LEDGER', reference: transaction.reference, status: transaction.status });
+      return;
+    }
+    const entry = transaction.entries[0];
+    const direction = entry.direction === 'DEBIT' ? 'DEBIT' : 'CREDIT';
+    setLedgerEdit(transaction);
+    setLedgerEditForm({
+      symbol: entry.assetSymbol,
+      amount: String(entry.amount),
+      direction,
+      customerLabel: readLedgerCustomerLabel(transaction),
+      reason: '',
+    });
+  }
+
+  async function saveLedgerEdit() {
+    if (!ledgerEdit) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/transactions/${ledgerEdit.id}/edit`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: ledgerEditForm.symbol,
+          amount: Number(ledgerEditForm.amount),
+          direction: ledgerEditForm.direction,
+          customerLabel: ledgerEditForm.customerLabel,
+          reason: ledgerEditForm.reason,
+        }),
+      });
+      const result = await res.json();
+      if (result.error) toast.error(result.error);
+      else {
+        toast.success(result.message);
+        setLedgerEdit(null);
+        reload();
+      }
     } finally { setBusy(false); }
   }
 
@@ -365,7 +423,7 @@ export function AdminUserDetailView() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-[15.5px] font-semibold">Customer activity controls</h2>
-          <p className="text-[12px] text-muted-foreground mt-0.5">Correct operational details here. Use a reversal or a ledger adjustment for any balance change.</p>
+          <p className="text-[12px] text-muted-foreground mt-0.5">Edit management-issued balance transactions here. Posted financial edits are safely reversed and reissued so the ledger stays auditable.</p>
         </div>
         <Button variant="outline" size="sm" className="rounded-full gap-1.5 text-[12px]" onClick={() => adminNavigate('transactions', { userId: id })}>
           <ReceiptText className="w-4 h-4" /> All ledger transactions
@@ -374,7 +432,7 @@ export function AdminUserDetailView() {
       <div className="grid lg:grid-cols-2 gap-4">
         <HistoryCard title="Ledger transactions" rows={data.ledgerTxs.slice(0, 10).map((t) => ({
           key: t.id, main: customerLedgerTitle(t), sub: `${t.reference} · ${fmtDateTime(t.createdAt)}`,
-          right: <div className="flex items-center gap-1.5"><StatusPill status={t.status === 'POSTED' ? 'COMPLETED' : t.status} /><Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={() => openRecord({ id: t.id, kind: 'LEDGER', reference: t.reference, status: t.status })}><Pencil className="w-3 h-3 mr-1" /> Note</Button></div>,
+          right: <div className="flex items-center gap-1.5"><StatusPill status={t.status === 'POSTED' ? 'COMPLETED' : t.status} /><Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={() => openLedgerEdit(t)}><Pencil className="w-3 h-3 mr-1" /> Edit</Button></div>,
         }))} />
         <HistoryCard title="Orders" rows={data.orders.slice(0, 10).map((o) => ({
           key: o.id, main: `${o.side} ${o.amountBase} ${o.baseSymbol}: ${fmtUsd(o.amountQuote)}`, sub: `${o.reference} · ${fmtDateTime(o.createdAt)}`,
@@ -520,12 +578,80 @@ export function AdminUserDetailView() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={ledgerEdit !== null} onOpenChange={(open) => { if (!open) setLedgerEdit(null); }}>
+        <DialogContent className="max-w-[460px]">
+          {ledgerEdit && <>
+            <DialogHeader>
+              <DialogTitle>Edit transaction {ledgerEdit.reference}</DialogTitle>
+              <DialogDescription>
+                Change the asset, amount or direction without manually undoing anything first. Saving performs one atomic correction: the original is reversed and the corrected transaction is reissued.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3.5 mt-1">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-[12.5px]">Direction</Label>
+                  <Select value={ledgerEditForm.direction} onValueChange={(v) => setLedgerEditForm({
+                    ...ledgerEditForm,
+                    direction: v,
+                    customerLabel: v === 'CREDIT' ? 'RECEIVED' : 'WALLET_DEBIT',
+                  })}>
+                    <SelectTrigger className="h-10 rounded-xl bg-secondary/60"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="CREDIT">Credit (add)</SelectItem>
+                      <SelectItem value="DEBIT">Debit (remove)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[12.5px]">Asset</Label>
+                  <Select value={ledgerEditForm.symbol} onValueChange={(v) => setLedgerEditForm({ ...ledgerEditForm, symbol: v })}>
+                    <SelectTrigger className="h-10 rounded-xl bg-secondary/60"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {u.wallets.map((w) => <SelectItem key={w.symbol} value={w.symbol}>{w.symbol}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[12.5px]">Customer activity label</Label>
+                <Select value={ledgerEditForm.customerLabel} onValueChange={(v) => setLedgerEditForm({ ...ledgerEditForm, customerLabel: v })}>
+                  <SelectTrigger className="h-10 rounded-xl bg-secondary/60"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {ledgerEditForm.direction === 'CREDIT' ? <>
+                      <SelectItem value="RECEIVED">Received</SelectItem>
+                      <SelectItem value="WALLET_CREDIT">Wallet credit</SelectItem>
+                      <SelectItem value="BONUS_CREDIT">Bonus credit</SelectItem>
+                    </> : <>
+                      <SelectItem value="WALLET_DEBIT">Wallet debit</SelectItem>
+                      <SelectItem value="SERVICE_FEE">Service fee</SelectItem>
+                    </>}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[12.5px]">Amount</Label>
+                <Input className="h-10 bg-secondary/60 rounded-xl nums" type="number" min="0" step="any" value={ledgerEditForm.amount} onChange={(e) => setLedgerEditForm({ ...ledgerEditForm, amount: e.target.value })} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[12.5px]">Reason for correction (required, audited)</Label>
+                <Textarea className="bg-secondary/60 rounded-xl min-h-[78px]" value={ledgerEditForm.reason} onChange={(e) => setLedgerEditForm({ ...ledgerEditForm, reason: e.target.value })} placeholder="Example: credited USD by mistake; should have been BTC" />
+              </div>
+              <p className="text-[11px] text-muted-foreground">The original transaction remains visible as REVERSED and the corrected replacement is added automatically. Balances and audit history stay consistent.</p>
+              <Button className="w-full h-10 rounded-xl font-semibold" disabled={busy || !(Number(ledgerEditForm.amount) > 0) || ledgerEditForm.reason.trim().length < 3} onClick={saveLedgerEdit}>
+                {busy ? 'Correcting…' : 'Save transaction changes'}
+              </Button>
+            </div>
+          </>}
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={record !== null} onOpenChange={(open) => { if (!open) setRecord(null); }}>
         <DialogContent className="max-w-[480px]">
           {record && <>
             <DialogHeader>
-              <DialogTitle>{record.kind === 'LEDGER' ? 'Add transaction correction note' : `Edit ${record.kind.toLowerCase()} details`}</DialogTitle>
-              <DialogDescription>{record.reference} · financial amounts, balances and posted network destinations cannot be rewritten.</DialogDescription>
+              <DialogTitle>{record.kind === 'LEDGER' ? 'Edit transaction note' : `Edit ${record.kind.toLowerCase()} details`}</DialogTitle>
+              <DialogDescription>{record.reference} · system-generated financial values remain tied to their source workflow; this editor safely corrects the transaction note without rewriting ledger balances.</DialogDescription>
             </DialogHeader>
             <div className="space-y-3.5 mt-1">
               {record.kind === 'DEPOSIT' && <>
