@@ -293,7 +293,7 @@ export function AdminTransactionsView() {
       <Dialog open={correctionOpen} onOpenChange={setCorrectionOpen}>
         <DialogContent className="max-w-[460px]">
           <DialogHeader>
-            <DialogTitle>{canFinanciallyEdit(selected) ? `Edit ${selected.reference}` : `Edit note for ${selected?.reference ?? 'transaction'}`}</DialogTitle>
+            <DialogTitle>{canFinanciallyEdit(selected) ? `Edit ${selected?.reference ?? 'transaction'}` : `Edit note for ${selected?.reference ?? 'transaction'}`}</DialogTitle>
             <DialogDescription>
               {canFinanciallyEdit(selected)
                 ? 'Change the asset, amount or direction directly. Saving reverses the original and reissues the corrected adjustment in one atomic operation.'
@@ -322,7 +322,7 @@ export function AdminTransactionsView() {
                   <Select value={editForm.symbol} onValueChange={(v) => setEditForm({ ...editForm, symbol: v })}>
                     <SelectTrigger className="h-10 rounded-xl bg-secondary/60"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {selected.walletSymbols.map((symbol) => <SelectItem key={symbol} value={symbol}>{symbol}</SelectItem>)}
+                      {(selected?.walletSymbols ?? []).map((symbol) => <SelectItem key={symbol} value={symbol}>{symbol}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
