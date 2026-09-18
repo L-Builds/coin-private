@@ -38,7 +38,7 @@ function ledgerCustomerLabel(transaction: LedgerTxRow): string {
   return transaction.entries[0]?.direction === 'DEBIT' ? 'WALLET_DEBIT' : 'RECEIVED';
 }
 
-function canFinanciallyEdit(transaction: LedgerTxRow | null): transaction is LedgerTxRow {
+function canFinanciallyEdit(transaction: LedgerTxRow | null): boolean {
   return Boolean(
     transaction
     && transaction.type === 'ADJUSTMENT'
