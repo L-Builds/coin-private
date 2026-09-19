@@ -84,7 +84,8 @@ export function AdminUserDetailView() {
   const { data, loading, reload } = useFetch<DetailData>(`/api/admin/users/${id}`, [id]);
 
   const [adjustOpen, setAdjustOpen] = useState(false);
-  const [adjust, setAdjust] = useState({ symbol: 'USD', amount: '', direction: 'CREDIT', customerLabel: 'RECEIVED', reason: '' });
+  const [adjust, setAdjust] = useState({ symbol: 'USD', amount: '', amountUnit: 'USD', direction: 'CREDIT', customerLabel: 'RECEIVED', reason: '' });
+  const [adjustReview, setAdjustReview] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profile, setProfile] = useState({ name: '', email: '', loginId: '', phone: '', address: '', country: '', role: 'CUSTOMER', kycStatus: 'PENDING', kycTier: '1', password: '' });
   const [closeOpen, setCloseOpen] = useState(false);
@@ -98,6 +99,19 @@ export function AdminUserDetailView() {
   const [busy, setBusy] = useState(false);
 
   async function submitAdjust() {
+    if (!data) return;
+    const wallet = data.user.wallets.find((w) => w.symbol === adjust.symbol);
+    const enteredAmount = Number(adjust.amount);
+    const price = adjust.symbol === 'USD' ? 1 : Number(wallet?.price ?? 0);
+    const nativeAmount = adjust.symbol === 'USD' || adjust.amountUnit === 'ASSET'
+      ? enteredAmount
+      : price > 0 ? enteredAmount / price : 0;
+
+    if (!(nativeAmount > 0)) {
+      toast.error('Enter a valid adjustment amount');
+      return;
+    }
+
     setBusy(true);
     try {
       const res = await fetch('/api/admin/credit', {
@@ -105,7 +119,7 @@ export function AdminUserDetailView() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: id, symbol: adjust.symbol, direction: adjust.direction, customerLabel: adjust.customerLabel,
-          amount: parseFloat(adjust.amount), reason: adjust.reason,
+          amount: nativeAmount, reason: adjust.reason,
         }),
       });
       const d = await res.json();
@@ -113,7 +127,8 @@ export function AdminUserDetailView() {
       else {
         toast.success(d.message);
         setAdjustOpen(false);
-        setAdjust({ symbol: 'USD', amount: '', direction: 'CREDIT', customerLabel: 'RECEIVED', reason: '' });
+        setAdjustReview(false);
+        setAdjust({ symbol: 'USD', amount: '', amountUnit: 'USD', direction: 'CREDIT', customerLabel: 'RECEIVED', reason: '' });
         reload();
       }
     } finally {
@@ -303,6 +318,33 @@ export function AdminUserDetailView() {
 
   const u = data.user;
   const totalValue = u.wallets.reduce((s, w) => s + w.valueUsd, 0);
+  const adjustWallet = u.wallets.find((w) => w.symbol === adjust.symbol) ?? null;
+  const adjustPrice = adjust.symbol === 'USD' ? 1 : Number(adjustWallet?.price ?? 0);
+  const adjustEnteredAmount = Number(adjust.amount);
+  const adjustEnteredValid = Number.isFinite(adjustEnteredAmount) && adjustEnteredAmount > 0;
+  const adjustNativeAmount = adjustEnteredValid
+    ? (adjust.symbol === 'USD' || adjust.amountUnit === 'ASSET'
+      ? adjustEnteredAmount
+      : adjustPrice > 0 ? adjustEnteredAmount / adjustPrice : 0)
+    : 0;
+  const adjustUsdAmount = adjustEnteredValid
+    ? (adjust.symbol === 'USD' || adjust.amountUnit === 'USD'
+      ? adjustEnteredAmount
+      : adjustEnteredAmount * adjustPrice)
+    : 0;
+  const adjustCurrentAvailable = Number(adjustWallet?.available ?? 0);
+  const adjustCurrentUsd = adjustCurrentAvailable * adjustPrice;
+  const adjustNewAvailable = adjust.direction === 'CREDIT'
+    ? adjustCurrentAvailable + adjustNativeAmount
+    : adjustCurrentAvailable - adjustNativeAmount;
+  const adjustNewUsd = adjustNewAvailable * adjustPrice;
+  const adjustPriceUnavailable = adjust.symbol !== 'USD' && adjust.amountUnit === 'USD' && !(adjustPrice > 0);
+  const adjustInsufficient = adjust.direction === 'DEBIT' && adjustNativeAmount > adjustCurrentAvailable + 1e-9;
+  const adjustCanReview = adjustEnteredValid
+    && adjustNativeAmount > 0
+    && !adjustPriceUnavailable
+    && !adjustInsufficient
+    && adjust.reason.trim().length >= 3;
 
   return (
     <div className="space-y-6">
@@ -461,72 +503,166 @@ export function AdminUserDetailView() {
       </div>
 
       {/* adjust dialog */}
-      <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}>
-        <DialogContent className="max-w-[400px]">
+      <Dialog open={adjustOpen} onOpenChange={(open) => { setAdjustOpen(open); if (!open) setAdjustReview(false); }}>
+        <DialogContent className="max-w-[500px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Adjust funds: {u.name}</DialogTitle>
+            <DialogTitle>{adjustReview ? 'Review fund adjustment' : `Adjust funds: ${u.name}`}</DialogTitle>
             <DialogDescription>
-              Posts a real ledger adjustment. Use credit for support deposits, debit for corrections: both are audited and reversible from Transactions.
+              {adjustReview
+                ? 'Confirm the asset, converted amount and resulting balance before posting the audited ledger adjustment.'
+                : 'Choose the asset and enter the amount in dollars or in the selected asset. Coin Private calculates the conversion before anything is posted.'}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3.5 mt-1">
-            <div className="grid grid-cols-2 gap-3">
+
+          {!adjustReview ? (
+            <div className="space-y-4 mt-1">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-[12.5px]">Direction</Label>
+                  <Select value={adjust.direction} onValueChange={(v) => { setAdjustReview(false); setAdjust({ ...adjust, direction: v, customerLabel: v === 'CREDIT' ? 'RECEIVED' : 'WALLET_DEBIT' }); }}>
+                    <SelectTrigger className="h-10 rounded-xl bg-secondary/60"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="CREDIT">Credit (add)</SelectItem>
+                      <SelectItem value="DEBIT">Debit (remove)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[12.5px]">Asset</Label>
+                  <Select value={adjust.symbol} onValueChange={(v) => { setAdjustReview(false); setAdjust({ ...adjust, symbol: v, amount: '', amountUnit: 'USD' }); }}>
+                    <SelectTrigger className="h-10 rounded-xl bg-secondary/60"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {u.wallets.map((w) => <SelectItem key={w.symbol} value={w.symbol}>{w.symbol}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-border/70 bg-secondary/25 p-3.5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] text-muted-foreground">Current available balance</p>
+                    <p className="text-[14px] font-semibold nums mt-0.5">{fmtCrypto(adjustCurrentAvailable, adjust.symbol, 8)}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[11px] text-muted-foreground">Estimated value</p>
+                    <p className="text-[13px] font-medium nums mt-0.5">{fmtUsd(adjustCurrentUsd)}</p>
+                  </div>
+                </div>
+                {adjust.symbol !== 'USD' && (
+                  <p className="text-[10.5px] text-muted-foreground mt-2">Current price used for this adjustment: 1 {adjust.symbol} ≈ {fmtUsd(adjustPrice)}</p>
+                )}
+              </div>
+
               <div className="space-y-1.5">
-                <Label className="text-[12.5px]">Direction</Label>
-                <Select value={adjust.direction} onValueChange={(v) => setAdjust({ ...adjust, direction: v, customerLabel: v === 'CREDIT' ? 'RECEIVED' : 'WALLET_DEBIT' })}>
+                <Label className="text-[12.5px]">Customer activity label</Label>
+                <Select value={adjust.customerLabel} onValueChange={(v) => { setAdjustReview(false); setAdjust({ ...adjust, customerLabel: v }); }}>
                   <SelectTrigger className="h-10 rounded-xl bg-secondary/60"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="CREDIT">Credit (add)</SelectItem>
-                    <SelectItem value="DEBIT">Debit (remove)</SelectItem>
+                    {adjust.direction === 'CREDIT' ? <>
+                      <SelectItem value="RECEIVED">Received</SelectItem>
+                      <SelectItem value="WALLET_CREDIT">Wallet credit</SelectItem>
+                      <SelectItem value="BONUS_CREDIT">Bonus credit</SelectItem>
+                    </> : <>
+                      <SelectItem value="WALLET_DEBIT">Wallet debit</SelectItem>
+                      <SelectItem value="SERVICE_FEE">Service fee</SelectItem>
+                    </>}
                   </SelectContent>
                 </Select>
               </div>
+
+              <div className="rounded-2xl border border-border/70 p-3.5 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <Label className="text-[12.5px]">Amount</Label>
+                    <p className="text-[10.5px] text-muted-foreground mt-0.5">Enter the value in the format that is easiest for management.</p>
+                  </div>
+                  {adjust.symbol !== 'USD' && (
+                    <div className="inline-flex rounded-xl bg-secondary/70 p-1">
+                      <button type="button" onClick={() => { setAdjustReview(false); setAdjust({ ...adjust, amount: '', amountUnit: 'USD' }); }} className={cn('h-8 px-3 rounded-lg text-[11.5px] font-semibold transition-colors', adjust.amountUnit === 'USD' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}>USD</button>
+                      <button type="button" onClick={() => { setAdjustReview(false); setAdjust({ ...adjust, amount: '', amountUnit: 'ASSET' }); }} className={cn('h-8 px-3 rounded-lg text-[11.5px] font-semibold transition-colors', adjust.amountUnit === 'ASSET' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}>{adjust.symbol}</button>
+                    </div>
+                  )}
+                </div>
+                <div className="relative">
+                  {adjust.amountUnit === 'USD' && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-[15px]">$</span>}
+                  <Input
+                    className={cn('h-12 bg-secondary/60 rounded-xl nums text-[18px] font-semibold', adjust.amountUnit === 'USD' && 'pl-7')}
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="any"
+                    value={adjust.amount}
+                    onChange={(e) => { setAdjustReview(false); setAdjust({ ...adjust, amount: e.target.value }); }}
+                    placeholder="0.00"
+                  />
+                </div>
+
+                {adjustEnteredValid && !adjustPriceUnavailable && (
+                  <div className="rounded-xl bg-secondary/45 px-3 py-2.5 flex items-center justify-between gap-3">
+                    <span className="text-[11px] text-muted-foreground">Converted adjustment</span>
+                    <div className="text-right">
+                      <p className="text-[12.5px] font-semibold nums">{fmtCrypto(adjustNativeAmount, adjust.symbol, 8)}</p>
+                      <p className="text-[10.5px] text-muted-foreground nums">≈ {fmtUsd(adjustUsdAmount)}</p>
+                    </div>
+                  </div>
+                )}
+
+                {adjustPriceUnavailable && <p className="text-[11px] text-destructive">A USD conversion is unavailable for {adjust.symbol} because no current price is available. Enter the amount directly in {adjust.symbol} instead.</p>}
+                {adjustInsufficient && <p className="text-[11px] text-destructive">This debit is larger than the customer&apos;s available {adjust.symbol} balance.</p>}
+              </div>
+
               <div className="space-y-1.5">
-                <Label className="text-[12.5px]">Asset</Label>
-                <Select value={adjust.symbol} onValueChange={(v) => setAdjust({ ...adjust, symbol: v })}>
-                  <SelectTrigger className="h-10 rounded-xl bg-secondary/60"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {u.wallets.map((w) => <SelectItem key={w.symbol} value={w.symbol}>{w.symbol}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <Label className="text-[12.5px]">Reason (required)</Label>
+                <Input className="h-10 bg-secondary/60 rounded-xl" value={adjust.reason} onChange={(e) => { setAdjustReview(false); setAdjust({ ...adjust, reason: e.target.value }); }} placeholder="Support case #1234" />
+              </div>
+
+              <div className="rounded-2xl border border-border/70 bg-secondary/20 p-3.5 space-y-2">
+                <div className="flex justify-between gap-4 text-[12px]"><span className="text-muted-foreground">Action</span><span className="font-medium">{adjust.direction === 'CREDIT' ? 'Credit (add)' : 'Debit (remove)'}</span></div>
+                <div className="flex justify-between gap-4 text-[12px]"><span className="text-muted-foreground">Asset</span><span className="font-medium nums">{adjust.symbol}</span></div>
+                <div className="flex justify-between gap-4 text-[12px]"><span className="text-muted-foreground">Adjustment</span><span className="font-medium nums">{adjustEnteredValid && !adjustPriceUnavailable ? `${fmtCrypto(adjustNativeAmount, adjust.symbol, 8)} · ${fmtUsd(adjustUsdAmount)}` : '—'}</span></div>
+                <div className="flex justify-between gap-4 text-[12px]"><span className="text-muted-foreground">Estimated new available</span><span className={cn('font-semibold nums', adjustInsufficient && 'text-destructive')}>{adjustEnteredValid && !adjustPriceUnavailable ? `${fmtCrypto(adjustNewAvailable, adjust.symbol, 8)} · ${fmtUsd(adjustNewUsd)}` : '—'}</span></div>
+              </div>
+
+              <Button className="w-full h-11 rounded-xl font-semibold" disabled={!adjustCanReview} onClick={() => setAdjustReview(true)}>
+                Review {adjust.direction === 'CREDIT' ? 'credit' : 'debit'}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4 mt-1">
+              <div className="rounded-2xl border border-border/70 overflow-hidden">
+                <div className="p-4 bg-secondary/25 border-b border-border/70">
+                  <p className="text-[11px] text-muted-foreground">Customer</p>
+                  <p className="text-[15px] font-semibold mt-0.5">{u.name}</p>
+                </div>
+                <div className="p-4 space-y-3">
+                  <div className="flex justify-between gap-4 text-[12.5px]"><span className="text-muted-foreground">Action</span><span className="font-medium">{adjust.direction === 'CREDIT' ? 'Credit (add)' : 'Debit (remove)'}</span></div>
+                  <div className="flex justify-between gap-4 text-[12.5px]"><span className="text-muted-foreground">Asset</span><span className="font-medium nums">{adjust.symbol}</span></div>
+                  <div className="flex justify-between gap-4 text-[12.5px]"><span className="text-muted-foreground">Entered</span><span className="font-medium nums">{adjust.amountUnit === 'USD' ? fmtUsd(adjustEnteredAmount) : fmtCrypto(adjustEnteredAmount, adjust.symbol, 8)}</span></div>
+                  <div className="flex justify-between gap-4 text-[12.5px]"><span className="text-muted-foreground">Ledger amount</span><span className="font-semibold nums">{fmtCrypto(adjustNativeAmount, adjust.symbol, 8)}</span></div>
+                  {adjust.symbol !== 'USD' && <div className="flex justify-between gap-4 text-[12.5px]"><span className="text-muted-foreground">USD value</span><span className="font-medium nums">≈ {fmtUsd(adjustUsdAmount)}</span></div>}
+                  <div className="flex justify-between gap-4 text-[12.5px]"><span className="text-muted-foreground">Current available</span><span className="font-medium nums">{fmtCrypto(adjustCurrentAvailable, adjust.symbol, 8)}</span></div>
+                  <div className="flex justify-between gap-4 text-[12.5px]"><span className="text-muted-foreground">New available</span><span className="font-semibold nums">{fmtCrypto(adjustNewAvailable, adjust.symbol, 8)} · {fmtUsd(adjustNewUsd)}</span></div>
+                  <div className="flex justify-between gap-4 text-[12.5px]"><span className="text-muted-foreground">Activity label</span><span className="font-medium">{adjust.customerLabel.replaceAll('_', ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase())}</span></div>
+                  <div className="pt-2 border-t border-border/70">
+                    <p className="text-[11px] text-muted-foreground">Reason</p>
+                    <p className="text-[12.5px] mt-1 break-words">{adjust.reason}</p>
+                  </div>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">The ledger receives the converted {adjust.symbol} amount shown above. The existing audited adjustment flow is unchanged.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <Button variant="outline" className="h-10 rounded-xl" disabled={busy} onClick={() => setAdjustReview(false)}>Back</Button>
+                <Button className="h-10 rounded-xl font-semibold" disabled={busy || !adjustCanReview} onClick={submitAdjust}>
+                  {busy ? 'Posting…' : adjust.direction === 'CREDIT' ? (
+                    <><ArrowDownToLine className="w-4 h-4 mr-2" /> Confirm credit</>
+                  ) : (
+                    <><ArrowUpFromLine className="w-4 h-4 mr-2" /> Confirm debit</>
+                  )}
+                </Button>
               </div>
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-[12.5px]">Customer activity label</Label>
-              <Select value={adjust.customerLabel} onValueChange={(v) => setAdjust({ ...adjust, customerLabel: v })}>
-                <SelectTrigger className="h-10 rounded-xl bg-secondary/60"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {adjust.direction === 'CREDIT' ? <>
-                    <SelectItem value="RECEIVED">Received</SelectItem>
-                    <SelectItem value="WALLET_CREDIT">Wallet credit</SelectItem>
-                    <SelectItem value="BONUS_CREDIT">Bonus credit</SelectItem>
-                  </> : <>
-                    <SelectItem value="WALLET_DEBIT">Wallet debit</SelectItem>
-                    <SelectItem value="SERVICE_FEE">Service fee</SelectItem>
-                  </>}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-[12.5px]">Amount</Label>
-              <Input className="h-10 bg-secondary/60 rounded-xl nums" type="number" min="0" step="any" value={adjust.amount} onChange={(e) => setAdjust({ ...adjust, amount: e.target.value })} placeholder="0.00" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-[12.5px]">Reason (required)</Label>
-              <Input className="h-10 bg-secondary/60 rounded-xl" value={adjust.reason} onChange={(e) => setAdjust({ ...adjust, reason: e.target.value })} placeholder="Support case #1234" />
-            </div>
-            <Button
-              className="w-full h-10 rounded-xl font-semibold"
-              disabled={busy || !(parseFloat(adjust.amount) > 0) || adjust.reason.trim().length < 3}
-              onClick={submitAdjust}
-            >
-              {busy ? 'Posting…' : adjust.direction === 'CREDIT' ? (
-                <><ArrowDownToLine className="w-4 h-4 mr-2" /> Credit {adjust.symbol}</>
-              ) : (
-                <><ArrowUpFromLine className="w-4 h-4 mr-2" /> Debit {adjust.symbol}</>
-              )}
-            </Button>
-          </div>
+          )}
         </DialogContent>
       </Dialog>
 
