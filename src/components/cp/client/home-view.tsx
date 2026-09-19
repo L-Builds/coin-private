@@ -8,7 +8,7 @@
 import { useMemo, useState } from 'react';
 import { useUI } from '@/lib/store';
 import { useAuth } from '@/lib/store';
-import { usePortfolio, usePrices } from '@/hooks/use-cp-data';
+import { useFetch, usePortfolio, usePrices } from '@/hooks/use-cp-data';
 import {
   AssetIcon, PctBadge, PriceText, SectionHeader, SkeletonBlock,
   EmptyState, BalanceDisplay, LiveBadge,
@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import {
   ArrowDownToLine, ArrowUpFromLine, Send, QrCode, ArrowLeftRight,
-  ChevronRight, LineChart as ChartIcon, Wallet, Eye, EyeOff, Gift, ShieldCheck,
+  ChevronRight, LineChart as ChartIcon, Wallet, Eye, EyeOff, Gift, ShieldCheck, X,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -35,8 +35,10 @@ export function HomeView() {
   const { user } = useAuth();
   const { portfolio, loading } = usePortfolio();
   const { quotes, provider, updatedAt } = usePrices();
+  const { data: withdrawalNoticeData, reload: reloadWithdrawalNotice } = useFetch<{ notice: { id: string; createdAt: string } | null }>('/api/withdrawal-notice', [portfolio?.updatedAt]);
   const [range, setRange] = useState('1D');
   const [hidden, setHidden] = useState(false);
+  const [dismissingNotice, setDismissingNotice] = useState(false);
 
   const chartData = useMemo(() => {
     if (!portfolio?.spark?.length) return [];
@@ -71,6 +73,17 @@ export function HomeView() {
     ? new Date(match.unlockAt).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'long', day: 'numeric', year: 'numeric' })
     : null;
 
+  async function dismissWithdrawalNotice() {
+    if (dismissingNotice) return;
+    setDismissingNotice(true);
+    try {
+      const res = await fetch('/api/withdrawal-notice', { method: 'DELETE' });
+      if (res.ok) await reloadWithdrawalNotice();
+    } finally {
+      setDismissingNotice(false);
+    }
+  }
+
   return (
     <div className="space-y-7">
       {/* ---------- Greeting + balance ---------- */}
@@ -99,6 +112,38 @@ export function HomeView() {
           </div>
           <span className="hidden md:inline-flex"><LiveBadge provider={provider} updatedAt={updatedAt} /></span>
         </div>
+
+        {withdrawalNoticeData?.notice && (
+          <div className="mt-5 relative rounded-2xl border border-warn/25 bg-warn/8 px-4 py-4 pr-11">
+            <button
+              type="button"
+              onClick={dismissWithdrawalNotice}
+              disabled={dismissingNotice}
+              className="absolute right-3 top-3 p-1.5 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary/70 transition-colors"
+              aria-label="Dismiss withdrawal notice"
+              title="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <p className="text-[14.5px] font-semibold text-foreground">Withdrawal currently unavailable</p>
+            <p className="text-[12.5px] leading-relaxed text-muted-foreground mt-1.5 max-w-[680px]">
+              Your balance has exceeded the <span className="font-medium text-foreground">$5,000 withdrawal threshold</span> for this account level. Once this threshold is crossed, withdrawals remain unavailable until additional balance is added to the account.
+            </p>
+            <div className="grid grid-cols-2 gap-3 mt-3 max-w-[420px]">
+              <div className="rounded-xl bg-background/55 border border-border/70 px-3 py-2.5">
+                <p className="text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground">Current balance</p>
+                <p className="text-[14px] font-semibold nums mt-0.5">{fmtUsd(total)}</p>
+              </div>
+              <div className="rounded-xl bg-background/55 border border-border/70 px-3 py-2.5">
+                <p className="text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground">Withdrawal threshold</p>
+                <p className="text-[14px] font-semibold nums mt-0.5">$5,000.00</p>
+              </div>
+            </div>
+            <p className="text-[12.5px] leading-relaxed text-muted-foreground mt-3 max-w-[680px]">
+              Add more funds to your balance to restore withdrawal access. Once the account meets the required balance level, withdrawals will become available again.
+            </p>
+          </div>
+        )}
 
         {/* ---------- Chart ---------- */}
         <div className="mt-5 relative">

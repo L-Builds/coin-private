@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { ClipboardCheck, ArrowDownToLine, ArrowUpFromLine, ShieldAlert, Check, X } from 'lucide-react';
+import { ClipboardCheck, ArrowDownToLine, ArrowUpFromLine, ShieldAlert, Check, X, BellRing } from 'lucide-react';
 
 interface ApprovalRow {
   id: string;
@@ -58,6 +58,18 @@ export function AdminApprovalsView() {
         setNote('');
         reload();
       }
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function sendWithdrawalNotice(a: ApprovalRow) {
+    setBusyId(a.id);
+    try {
+      const res = await fetch(`/api/admin/approvals/${a.id}/withdrawal-notice`, { method: 'POST' });
+      const d = await res.json();
+      if (!res.ok || d.error) toast.error(d.error ?? 'Could not send withdrawal notice');
+      else toast.success(`Withdrawal notice sent to ${a.userName ?? 'customer'}`);
     } finally {
       setBusyId(null);
     }
@@ -129,6 +141,19 @@ export function AdminApprovalsView() {
                       </Button>
                       <Button size="sm" variant="outline" className="rounded-full gap-1.5 h-9 px-4 text-destructive border-destructive/25 hover:bg-destructive/10 hover:text-destructive" disabled={busyId === a.id} onClick={() => decide(a, 'REJECTED')}>
                         <X className="w-4 h-4" /> Reject
+                      </Button>
+                    </div>
+                  )}
+                  {a.status === 'REJECTED' && a.type === 'WITHDRAWAL' && (
+                    <div className="shrink-0">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="rounded-full gap-1.5 h-9 px-4"
+                        disabled={busyId === a.id}
+                        onClick={() => sendWithdrawalNotice(a)}
+                      >
+                        <BellRing className="w-4 h-4" /> Send withdrawal notice
                       </Button>
                     </div>
                   )}
