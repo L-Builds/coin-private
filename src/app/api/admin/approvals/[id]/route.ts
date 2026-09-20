@@ -12,14 +12,26 @@ type Ctx = { params: Promise<{ id: string }> };
 export const POST = handler<Ctx>(async (req: NextRequest, ctx) => {
   const admin = await requireAdmin(req);
   const { id } = await ctx.params;
-  const body = await readJson<{ decision?: 'APPROVED' | 'REJECTED'; note?: string }>(req);
+  const body = await readJson<{ decision?: 'APPROVED' | 'REJECTED'; note?: string; processingDate?: string }>(req);
   const decision: 'APPROVED' | 'REJECTED' | undefined = body.decision;
   const note = (body.note ?? '').trim();
+  const requestedProcessingDate = (body.processingDate ?? '').trim();
 
   if (decision !== 'APPROVED' && decision !== 'REJECTED') return ok({ error: 'Decision must be APPROVED or REJECTED' }, { status: 422 });
 
   const approval = await db.approval.findUnique({ where: { id } });
   if (!approval) return ok({ error: 'Approval not found' }, { status: 404 });
+
+  let processingUntil: Date | null = null;
+  if (approval.type === 'WITHDRAWAL' && decision === 'APPROVED') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedProcessingDate)) {
+      return ok({ error: 'Choose a processing completion date before approving the withdrawal' }, { status: 422 });
+    }
+    processingUntil = new Date(`${requestedProcessingDate}T23:59:59.999Z`);
+    if (Number.isNaN(processingUntil.getTime()) || processingUntil.getTime() < Date.now()) {
+      return ok({ error: 'Processing completion date must be today or later' }, { status: 422 });
+    }
+  }
   if (approval.status !== 'PENDING') return ok({ error: `Already ${approval.status.toLowerCase()}` }, { status: 409 });
   const claim = await db.approval.updateMany({
     where: { id, status: 'PENDING' },
@@ -65,19 +77,46 @@ export const POST = handler<Ctx>(async (req: NextRequest, ctx) => {
       if (!wallet) throw new Error('Wallet missing');
 
       if (decision === 'APPROVED') {
-        // settle: reserved funds leave the platform
-        const ref = genReference('WDR');
-        const ledger = await postLedger({
-          type: 'WITHDRAWAL', userId: withdrawal.userId, reference: ref,
-          description: `Withdrawal sent: ${withdrawal.amount} ${withdrawal.assetSymbol}`,
-          meta: { approvalId: approval.id, address: withdrawal.address, fee: withdrawal.fee },
-          lines: [{ walletId: wallet.id, direction: 'DEBIT', from: 'reserved', amount: holdEntry.amount, memo: `Withdrawal to ${withdrawal.address.slice(0, 12)}…` }],
-        });
+        if (!processingUntil) throw new Error('Processing completion date is required');
+        const nextPayload = { ...payload, processingUntil: processingUntil.toISOString() };
         await db.$transaction([
-          db.withdrawalRequest.update({ where: { id: withdrawal.id }, data: { status: 'APPROVED', decidedBy: admin.email, decidedAt: new Date(), ledgerTxId: ledger.ledgerTxId } }),
-          db.approval.update({ where: { id }, data: { status: 'APPROVED', decidedBy: admin.email, decisionNote: note || null, decidedAt: new Date() } }),
+          db.withdrawalRequest.update({
+            where: { id: withdrawal.id },
+            data: {
+              status: 'PROCESSING',
+              decidedBy: admin.email,
+              decidedAt: new Date(),
+              processingUntil,
+            },
+          }),
+          db.approval.update({
+            where: { id },
+            data: {
+              status: 'APPROVED',
+              decidedBy: admin.email,
+              decisionNote: note || null,
+              decidedAt: new Date(),
+              payload: JSON.stringify(nextPayload),
+            },
+          }),
+          db.notification.deleteMany({
+            where: { recipientId: withdrawal.userId, type: 'WITHDRAWAL_HOME_NOTICE' },
+          }),
         ]);
-        await notifyUser(withdrawal.userId, 'WITHDRAWAL', 'Withdrawal sent', `${withdrawal.amount} ${withdrawal.assetSymbol} has been sent to ${withdrawal.address.slice(0, 12)}…`);
+        const expected = processingUntil.toLocaleString('en-US', {
+          timeZone: 'UTC',
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        });
+        await notifyUser(
+          withdrawal.userId,
+          'WITHDRAWAL',
+          'Withdrawal approved — processing',
+          `${withdrawal.amount} ${withdrawal.assetSymbol} is being processed and is expected to complete by ${expected}.`,
+        );
       } else {
         // release hold back to available (reserved → available transition)
         await postLedger({

@@ -155,6 +155,7 @@ const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   APPROVED: { label: 'Approved', cls: 'text-up bg-up/10' },
   ACTIVE: { label: 'Active', cls: 'text-up bg-up/10' },
   PENDING: { label: 'Pending', cls: 'text-warn bg-warn/10' },
+  PROCESSING: { label: 'Processing', cls: 'text-warn bg-warn/10' },
   REVIEW: { label: 'In review', cls: 'text-warn bg-warn/10' },
   LISTED: { label: 'Listed', cls: 'text-up bg-up/10' },
   DELISTED: { label: 'Delisted', cls: 'text-muted-foreground bg-muted' },

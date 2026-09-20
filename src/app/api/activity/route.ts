@@ -1,12 +1,14 @@
 import { NextRequest } from 'next/server';
 import { db } from '@/lib/db';
 import { requireAuth, handler, ok, readJson } from '@/lib/api';
+import { settleMaturedWithdrawals } from '@/lib/withdrawal-processing';
 
 // GET /api/activity: unified activity feed for the signed-in user.
 // Merges orders, transfers, deposits, withdrawals and ledger entries.
 // Customer-hidden items are omitted without deleting the underlying records.
 export const GET = handler(async (req: NextRequest) => {
   const user = await requireAuth(req);
+  await settleMaturedWithdrawals(user.id);
   const url = new URL(req.url);
   const filter = url.searchParams.get('filter') ?? 'all';
 
@@ -91,7 +93,7 @@ export const GET = handler(async (req: NextRequest) => {
       title: 'Withdrawal',
       subtitle: `${w.amount} ${w.assetSymbol} → ${w.address.slice(0, 14)}…`,
       amount: w.amount, symbol: w.assetSymbol,
-      status: w.status === 'APPROVED' ? 'COMPLETED' : w.status === 'REJECTED' ? 'REJECTED' : 'PENDING',
+      status: w.status === 'APPROVED' ? 'COMPLETED' : w.status === 'REJECTED' ? 'REJECTED' : w.status === 'PROCESSING' ? 'PROCESSING' : 'PENDING',
       type: 'WITHDRAWAL', createdAt: w.createdAt.toISOString(),
     });
   }

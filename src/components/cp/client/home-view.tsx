@@ -36,6 +36,7 @@ export function HomeView() {
   const { portfolio, loading } = usePortfolio();
   const { quotes, provider, updatedAt } = usePrices();
   const { data: withdrawalNoticeData, reload: reloadWithdrawalNotice } = useFetch<{ notice: { id: string; createdAt: string } | null }>('/api/withdrawal-notice', [portfolio?.updatedAt]);
+  const { data: withdrawalProcessingData } = useFetch<{ withdrawals: Array<{ id: string; reference: string; assetSymbol: string; amount: number; amountUsd: number; processingUntil: string; createdAt: string }> }>('/api/withdrawal-processing', [portfolio?.updatedAt]);
   const [range, setRange] = useState('1D');
   const [hidden, setHidden] = useState(false);
   const [dismissingNotice, setDismissingNotice] = useState(false);
@@ -72,6 +73,7 @@ export function HomeView() {
   const matchUnlockDate = match?.unlockAt
     ? new Date(match.unlockAt).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'long', day: 'numeric', year: 'numeric' })
     : null;
+  const processingWithdrawals = withdrawalProcessingData?.withdrawals ?? [];
 
   async function dismissWithdrawalNotice() {
     if (dismissingNotice) return;
@@ -112,6 +114,49 @@ export function HomeView() {
           </div>
           <span className="hidden md:inline-flex"><LiveBadge provider={provider} updatedAt={updatedAt} /></span>
         </div>
+
+        {processingWithdrawals.length ? (() => {
+          const next = processingWithdrawals[0];
+          const expected = new Date(next.processingUntil).toLocaleString('en-US', {
+            timeZone: 'UTC',
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+          });
+          const amountLabel = next.assetSymbol === 'USD'
+            ? fmtUsd(next.amount)
+            : `${fmtCrypto(next.amount, next.assetSymbol, 8)} · ≈ ${fmtUsd(next.amountUsd)}`;
+          return (
+            <div className="mt-5 rounded-2xl border border-primary/20 bg-primary/[0.055] px-4 py-4">
+              <div className="flex items-start gap-3">
+                <span className="w-8 h-8 rounded-full bg-primary/12 text-primary flex items-center justify-center shrink-0 mt-0.5">
+                  <ArrowUpFromLine className="w-4 h-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[14.5px] font-semibold text-foreground">
+                    {processingWithdrawals.length} withdrawal{processingWithdrawals.length === 1 ? '' : 's'} processing
+                  </p>
+                  <p className="text-[12.5px] leading-relaxed text-muted-foreground mt-1">
+                    Your withdrawal has been approved and is currently being processed.
+                  </p>
+                  <div className="mt-3 rounded-xl border border-border/70 bg-background/55 px-3 py-2.5">
+                    <p className="text-[13px] font-medium nums text-foreground">{amountLabel}</p>
+                    <p className="text-[11.5px] text-muted-foreground mt-0.5">Expected by {expected}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate('activity')}
+                    className="text-[12.5px] font-medium text-primary hover:underline mt-3"
+                  >
+                    View withdrawal
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })() : null}
 
         {withdrawalNoticeData?.notice && (
           <div className="mt-5 relative rounded-2xl border border-warn/25 bg-warn/8 px-4 py-4 pr-11">

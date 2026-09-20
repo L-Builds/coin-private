@@ -204,12 +204,13 @@ model WithdrawalRequest {
   amount      Float
   fee         Float     @default(0)
   address     String
-  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED
-  note        String?
-  decidedBy   String?
-  decidedAt   DateTime?
-  ledgerTxId  String?
-  createdAt   DateTime  @default(now())
+  status          String    @default("PENDING") // PENDING | PROCESSING | SETTLING | APPROVED | REJECTED
+  note            String?
+  decidedBy       String?
+  decidedAt       DateTime?
+  processingUntil DateTime?
+  ledgerTxId      String?
+  createdAt       DateTime  @default(now())
 }
 
 // ---------------- Transaction edit trail ------------------

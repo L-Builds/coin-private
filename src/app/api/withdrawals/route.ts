@@ -6,10 +6,11 @@ import { genReference } from '@/lib/session';
 import { getNumber } from '@/lib/settings';
 import { audit, notifyAdmins } from '@/lib/notify';
 import { getWelcomeMatchSnapshot, releaseMaturedWelcomeMatch } from '@/lib/welcome-match';
+import { settleMaturedWithdrawals } from '@/lib/withdrawal-processing';
 
 // POST /api/withdrawals: creates a withdrawal request, moves funds
 // available → reserved (a real hold), and queues admin approval.
-// Nothing is debited until an admin approves; rejection releases the hold.
+// Approved withdrawals remain reserved through the management-set processing date; rejection releases the hold.
 export const POST = handler(async (req: NextRequest) => {
   const user = await requireAuth(req);
   const body = await readJson<{ symbol?: string; amount?: number; address?: string }>(req);
@@ -87,7 +88,7 @@ export const POST = handler(async (req: NextRequest) => {
 
   return ok({
     withdrawal,
-    message: 'Withdrawal requested: funds are held safely and will be sent after approval.',
+    message: 'Withdrawal requested: funds are held safely and will enter processing after approval.',
     pending: true,
   });
 });
@@ -96,6 +97,7 @@ export const POST = handler(async (req: NextRequest) => {
 export const GET = handler(async (req: NextRequest) => {
   const user = await requireAuth(req);
   await releaseMaturedWelcomeMatch(user.id);
+  await settleMaturedWithdrawals(user.id);
   const withdrawals = await db.withdrawalRequest.findMany({ where: { userId: user.id }, orderBy: { createdAt: 'desc' }, take: 50 });
   return ok({ withdrawals, welcomeMatch: await getWelcomeMatchSnapshot(user.id) });
 });
